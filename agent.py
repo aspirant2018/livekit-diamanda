@@ -48,19 +48,17 @@ class Assistant(Agent):
     @function_tool()
     async def on_enter(self):
         """Use this tool check the availability of a user when a caller connect with you."""
-
         
-        # Get the email of the user to check its presence
+        # When receiving a call, you get the caller's name from the phone number, and the called user's email and name from the database.
+        # For example, if the caller phone number is "+32471234567", you can get the caller's name from your database.
         email, called_name = "cbornecque@w3tel.com" , "Cédric Bornécque"
         caller_name = "Mazouz Abderahim"
-
 
         response        = requests.get(f"https://graph.microsoft.com/v1.0/users/{email}", headers={"Authorization": f"Bearer {DIAMY_GRAPH_ACCESS_TOKEN}"})
         user_id         = response.json()['id']
         availability    = get_user_presence(user_id)['raw']['availability']
         logger.info(f"The availability of the user is {availability}")
         
-
         if availability == "Available": await self.session.generate_reply(
                     instructions = f"Dites Bonjour a {caller_name}. Veuillez informer l'appelant que {called_name} est actuellement indisponible, et invitez-le à indiquer la raison de son appel afin de transmettre le message à {called_name}."
                 )
@@ -98,19 +96,19 @@ class Assistant(Agent):
     async def send_email(
           self,
           context: RunContext,
-          to: str,
+          content: str,
       ) -> dict:
-          """Send an email to a client.
+          """Send an email to the correspondant.
 
           Args:
-              to: The email of the client.
+              content: The the email content of the correpondant.
 
           Returns:
               A confirmation message
           """
 
-          logger.info(f"Context   {context}")
-          logger.info(f"to   {to}")
+          logger.info(f"Context: {context}")
+          logger.info(f"email Content  {content}")
 
           return {"success": "Ok"}
     '''
