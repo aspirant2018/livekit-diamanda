@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from typing import Literal
 
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions,function_tool,RunContext
+from livekit.agents import AgentSession, Agent, RoomInputOptions,function_tool,RunContext, ChatContext
 from livekit.plugins import (
     openai,
     noise_cancellation,
@@ -45,44 +45,25 @@ class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=system_prompt)
     
+    @function_tool()
     async def on_enter(self):
+        """Use this tool check the availability of a user when a caller connect with you."""
+
+        
+        # Get the email of the user to check its presence
+        email, called_name = "cbornecque@w3tel.com" , "Cédric Bornécque"
+        caller_name = "Mazouz Abderahim"
 
 
+        response        = requests.get(f"https://graph.microsoft.com/v1.0/users/{email}", headers={"Authorization": f"Bearer {DIAMY_GRAPH_ACCESS_TOKEN}"})
+        user_id         = response.json()['id']
+        availability    = get_user_presence(user_id)['raw']['availability']
+        logger.info(f"The availability of the user is {availability}")
+        
 
-        email = "cbornecque@w3tel.com"  # Replace with actual email
-        url = f"https://graph.microsoft.com/v1.0/users/{email}"
-        headers = {
-            "Authorization": f"Bearer {DIAMY_GRAPH_ACCESS_TOKEN}"
-        }
-
-        response = requests.get(url, headers=headers)
-
-        if response.status_code == 200:
-            logger.info("✅ User exists:")
-            user_id = response.json()['id']
-            logger.info(f"User id is: {user_id}")
-            availability = get_user_presence(user_id)['raw']['availability']
-            logger.info(f'availability: {availability}')
-        elif response.status_code == 404:
-            logger.info("❌ User not found")
-        else:
-            logger.error(f"⚠️ Error {response.status_code}: {response.text}")
-
-        # Logic to check the correpondent availability
-
-        called_email = "Bornecque"
-        available = True
-        status = 'available' if available else 'not available'
-        if available:
-            message = "Tell the caller that the correspondant they are trying to reach is {}. You will now transfer the call.".format(status)
-        else:
-            message = (
-                "Tell the caller that the correspondant they are trying to reach is {}. "
-                "If he or she is not available, tell the user that you can help by sending an email to the correspondant if it is urgent."
-            ).format(status)
-        await self.session.generate_reply(
-            instructions = message
-            )
+        if availability == "Available": await self.session.generate_reply(
+                    instructions = f"Dites Bonjour a {caller_name}. Veuillez informer l'appelant que {called_name} est actuellement indisponible, et invitez-le à indiquer la raison de son appel afin de transmettre le message à {called_name}."
+                )
     
     @function_tool()
     async def book_slot(
@@ -104,7 +85,6 @@ class Assistant(Agent):
           """
           
           logger.info(f"The context is  {context.function_call.model_json_schema()}")
-
           logger.info(f"The client is  {client}")
           logger.info(f"The slot is     {slot}")
           logger.info(f"The haircut_category is  {haircut_category}")
@@ -133,23 +113,26 @@ class Assistant(Agent):
           logger.info(f"to   {to}")
 
           return {"success": "Ok"}
-
+    '''
     @function_tool()
-    async def get_availability(
+    async def check_availability(
         self,
         context: RunContext,
-        date_range:str
+        email
     )-> dict:
-      """Get availability for a date range.
+      """check the correspondant's availability when a caller  connect with you.
 
       Args:
-          date_range: The date range to get availability for.
+          email: the email of the user to check its availability.
 
       Returns:
-          A list of available slots.
+          A dict of availability.
       """
-      return {'available_dates':["20/10","25/10","28/10"]}
-
+      response = requests.get(f"https://graph.microsoft.com/v1.0/users/{email}", headers={"Authorization": f"Bearer {DIAMY_GRAPH_ACCESS_TOKEN}"})
+      user_id = response.json()['id']
+      availability = get_user_presence(user_id)['raw']
+      return availability
+    '''
     @function_tool()
     async def has_appointment(
         self,
@@ -218,10 +201,9 @@ async def entrypoint(ctx: agents.JobContext):
 
         stt=openai.STT(language="fr",model="gpt-4o-transcribe"),
         llm=openai.LLM(model="gpt-4o-mini"),
-          tts = openai.TTS(
+        tts = openai.TTS(
                             model="gpt-4o-mini-tts",
                             voice="alloy",
-                            instructions="Speak in a friendly and conversational tone.",
                         ),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
@@ -231,16 +213,10 @@ async def entrypoint(ctx: agents.JobContext):
         room=ctx.room,
         agent=Assistant(),
         room_input_options=RoomInputOptions(
-            # LiveKit Cloud enhanced noise cancellation
-            # - If self-hosting, omit this parameter
-            # - For telephony applications, use `BVCTelephony` for best results
             noise_cancellation=noise_cancellation.BVC(), 
         ),
     )
 
-    await session.generate_reply(
-       instructions="greet the user and tell me that you will check if his correspondant is available or not to forward the call."
-    )
 
     background_audio = BackgroundAudioPlayer(
       # play office ambience sound looping in the background
@@ -248,9 +224,6 @@ async def entrypoint(ctx: agents.JobContext):
       # play keyboard typing sound when the agent is thinking
       thinking_sound=[
                AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.8),
-               #AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.7),
-               #AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE,volume=0.5),
-
          ],
     )
     await background_audio.start(room=ctx.room, agent_session=session)
