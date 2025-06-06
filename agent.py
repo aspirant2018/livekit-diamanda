@@ -120,7 +120,7 @@ class Diamanda(Agent):
             instructions = (
                 f"Bonjour {caller_name}, je me présente, je suis {self.agent_name} l'assistante de {called_name}. "
                 f"{called_name} est actuellement disponible."
-                f"Si vous souhaitez tout de même parler directement à {called_name}, je peux lui transférer votre appel immédiatement."
+                f"Si vous souhaitez  parler directement à {called_name}, je peux lui transférer votre appel immédiatement."
             )
 
 
