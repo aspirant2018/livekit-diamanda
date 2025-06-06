@@ -1,5 +1,5 @@
 import logging
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from typing import Literal
 
 from livekit import agents
@@ -13,22 +13,30 @@ from livekit.plugins import (
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.agents import BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip
 
-from  utils import get_user_presence
+from  utils import get_user_presence, get_access_token
 
-logger = logging.getLogger("annotated-tool-args")
+import requests
+import os
+
+
+
+logger = logging.getLogger("agent.py")
 logger.setLevel(logging.INFO)
 
 load_dotenv()
-import requests
-import os
-DIAMY_GRAPH_ACCESS_TOKEN = os.getenv("DIAMY_GRAPH_ACCESS_TOKEN")
-logger.info(f'The microsoft graph token: {DIAMY_GRAPH_ACCESS_TOKEN[0:10]}.....')
+
+tenant_id = os.getenv("tenant_id")
+client_id = os.getenv("client_id")
+client_secret = os.getenv("client_secret")
+
+access_token = get_access_token(tenant_id,client_id,client_secret).get('access_token')
+phonepilote_token  = os.getenv("PHONE_PILOT")
 
 
-system_prompt = """
-                You are an assistant communicating only in French via voice. 
-                Your role is to help callers to check if their correspondant is available or not.
-"""
+assert access_token, "MG Access token is missing!"
+assert phonepilote_token, "PP Access token is missing!"
+
+
 
 
 from pydantic import BaseModel, Field, EmailStr
@@ -41,10 +49,23 @@ class Client(BaseModel):
     last_name:   str= Field(...,description="The client's name")
     email:  str= Field(...,description="The client's email")
 
-class Assistant(Agent):
+class Diamanda(Agent):
+     
     def __init__(self) -> None:
+
+        self.agent_name = self.__class__.__name__
+
+        system_prompt = (
+                f"Vous êtes un assistant qui communique uniquement en français. et Votre nom est {self.agent_name}"
+                f"Vous êtes toujours poli, professionnel et clair."
+                f"Votre role principale est de dériger les appelants selon leur besoin vers le service le plus adapté en transferant leur appels"
+                f"les services sont les suivant: Support technique"
+            )
+
         super().__init__(instructions=system_prompt)
-    
+        
+      
+            
     @function_tool()
     async def on_enter(self):
         """Use this tool check the availability of a user when a caller connect with you."""
@@ -53,44 +74,102 @@ class Assistant(Agent):
         # For example, if the caller phone number is "+32471234567", you can get the caller's name from your database.
         email, called_name = "cbornecque@w3tel.com" , "Cédric Bornécque"
         caller_name = "Mazouz Abderahim"
+        SIP = 8933180963014 
 
-        response        = requests.get(f"https://graph.microsoft.com/v1.0/users/{email}", headers={"Authorization": f"Bearer {DIAMY_GRAPH_ACCESS_TOKEN}"})
-        user_id         = response.json()['id']
-        availability    = get_user_presence(user_id)['raw']['availability']
-        logger.info(f"The availability of the user is {availability}")
+        microsoft_graph_response = requests.get(f"https://graph.microsoft.com/v1.0/users/{email}",          headers={"Authorization": f"Bearer {access_token}"})
+        phonepilote_response     = requests.get(f"https://extranet.w3tel.com/api/voip/v1/extension/{SIP}",  headers={"Authorization": f"{phonepilote_token}"})
+
+        microsoft_graph_response.raise_for_status()
+        phonepilote_response.raise_for_status()
+
+        # Microsoft Graph
+        user_id = microsoft_graph_response.json()['id']
+        availability  = get_user_presence(user_id)['raw']['availability']
         
-        if availability == "Available": await self.session.generate_reply(
-                    instructions = f"Dites Bonjour a {caller_name}. Veuillez informer l'appelant que {called_name} est actuellement indisponible, et invitez-le à indiquer la raison de son appel afin de transmettre le message à {called_name}."
+        # Phone Pilot
+        status = phonepilote_response.json()['extension'][0]['status']
+        print("Status: ",status)
+        
+        if (availability != "Available") or (status != 1) :
+            instructions = (
+                f"Dites Bonjour à {caller_name}, puis présentez-vous"
+                f"Informez l'appelant que {called_name} est actuellement indisponible. "
+                f"Demandez-lui ensuite la raison de son appel afin de pouvoir le diriger vers "
+                f"le groupe le plus adapté à son besoin. "
+)
+            await self.session.generate_reply(
+                    instructions = instructions,
+                    allow_interruptions=False
+
                 )
+        else: # Disponible
+            instructions = (
+                f"Dites Bonjour à {caller_name}, puis présentez-vous en donnant votre prénom : "
+                f"Informez l'appelant que {called_name} est disponible, mais qu'il est important de préciser la raison de son appel "
+                f"afin de pouvoir diriger l'appel vers le service le plus adapté. "
+
+                f"Si l'appelant souhaite parler directement à {called_name}, proposez de transférer l'appel immédiatement. "
+                f"Sinon, selon la raison donnée (par exemple un besoin RH ou support), transférez l'appel au service correspondant "
+                f"en tenant compte de leur disponibilité. "
+                f"Si aucun service spécialisé n'est requis ou disponible, assurez-vous que l'appel soit traité de la meilleure manière possible."
+            )
+
+
+            await self.session.generate_reply(
+                    instructions =instructions,
+                    allow_interruptions=False
+                )
+
+
+        
     
     @function_tool()
-    async def book_slot(
+    async def check_technical_support_availability(
           self,
           context: RunContext,
-          client:Client,
-          slot:str,
-          haircut_category:str,
       ) -> dict:
-          """Book a slot for a service.
+        """
+        Vérifie si le support technique est disponible au moment de l'appel.
 
-          Args:
-              client: the client information need to make an appointment
-              slot: The slot to book.
-              haircut_category: The category of the haircut chosen by the client.
+        Args:
+            
 
-          Returns:
-              A confirmation message
-          """
-          
-          logger.info(f"The context is  {context.function_call.model_json_schema()}")
-          logger.info(f"The client is  {client}")
-          logger.info(f"The slot is     {slot}")
-          logger.info(f"The haircut_category is  {haircut_category}")
+        Returns:
+            dict: Clef = ID agent technique, valeur = booléen indiquant disponibilité.
+        """
 
+        # Mock des agents techniques avec leur disponibilité
+        technical_agents = {
+        "Kévin": {
+            "availability": True,
+            "current_task": "Support incident #1234",
+            "last_active": "2025-06-06T09:45:00Z",
+            "expertise": ["réseau", "serveurs"],
+            "contact": "kevin@example.com",
+            "response_time_sec": 15,
+            "shift": "matin",
+        },
+        "Aubin": {
+            "availability": False,
+            "current_task": None,
+            "last_active": "2025-06-06T08:00:00Z",
+            "expertise": ["base de données", "sécurité"],
+            "contact": "aubin@example.com",
+            "response_time_sec": None,
+            "shift": "après-midi",
+        },
+        "Cédric": {
+            "availability": True,
+            "current_task": "Maintenance système",
+            "last_active": "2025-06-06T09:30:00Z",
+            "expertise": ["systèmes Linux", "virtualisation"],
+            "contact": "cedric@example.com",
+            "response_time_sec": 20,
+            "shift": "matin",
+        },
+    }
 
-          # Logic - Insert in DataBase
-
-          return {"success": "Ok"}
+        return technical_agents
 
     @function_tool()
     async def send_email(
@@ -111,26 +190,7 @@ class Assistant(Agent):
           logger.info(f"email Content  {content}")
 
           return {"success": "Ok"}
-    '''
-    @function_tool()
-    async def check_availability(
-        self,
-        context: RunContext,
-        email
-    )-> dict:
-      """check the correspondant's availability when a caller  connect with you.
 
-      Args:
-          email: the email of the user to check its availability.
-
-      Returns:
-          A dict of availability.
-      """
-      response = requests.get(f"https://graph.microsoft.com/v1.0/users/{email}", headers={"Authorization": f"Bearer {DIAMY_GRAPH_ACCESS_TOKEN}"})
-      user_id = response.json()['id']
-      availability = get_user_presence(user_id)['raw']
-      return availability
-    '''
     @function_tool()
     async def has_appointment(
         self,
@@ -193,7 +253,16 @@ class Assistant(Agent):
 
 async def entrypoint(ctx: agents.JobContext):
     logger.info(f'Entry Point: {agents.JobContext}')
+
+
     await ctx.connect()
+    logger.info("CONNECTED")
+    logger.info(f"{'- Worker ID':<13}: {ctx.worker_id}")
+    logger.info(f"{'- Agent ID':<13}: {ctx.agent}")
+    logger.info(f"{'- Room':<13}: {ctx.room}")
+    logger.info(f"{'- Proc user id':<13}: {ctx.proc.userdata}")
+    logger.info(f"{'- Proc pid':<13}: {ctx.proc.pid}")
+        
 
     session = AgentSession(
 
@@ -209,12 +278,11 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=Assistant(),
+        agent=Diamanda(),
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(), 
         ),
     )
-
 
     background_audio = BackgroundAudioPlayer(
       # play office ambience sound looping in the background
