@@ -73,50 +73,59 @@ class Diamanda(Agent):
         # When receiving a call, you get the caller's name from the phone number, and the called user's email and name from the database.
         # For example, if the caller phone number is "+32471234567", you can get the caller's name from your database.
         email, called_name = "cbornecque@w3tel.com" , "Cédric Bornécque"
-        caller_name = "Mazouz Abderahim"
-        SIP = 8933180963014 
+        sipExtension = "8933180963004"
 
-        microsoft_graph_response = requests.get(f"https://graph.microsoft.com/v1.0/users/{email}",          headers={"Authorization": f"Bearer {access_token}"})
-        phonepilote_response     = requests.get(f"https://extranet.w3tel.com/api/voip/v1/extension/{SIP}",  headers={"Authorization": f"{phonepilote_token}"})
+        caller_name = "Mazouz Abderahim"
+        SIP = 8933180963014
+
+        url_mg = f"https://graph.microsoft.com/v1.0/users/{email}"
+        url_pp = f"https://extranet.w3tel.com/api/voip/v1/users/{SIP}/1/1000/undefined"
+
+        microsoft_graph_response = requests.get(url_mg, headers={"Authorization": f"Bearer {access_token}"})
+        phonepilote_response     = requests.get(url_pp,  headers={"Authorization": f"{phonepilote_token}"})
 
         microsoft_graph_response.raise_for_status()
         phonepilote_response.raise_for_status()
 
-        # Microsoft Graph
+        # Availability on Microsoft Graph
         user_id = microsoft_graph_response.json()['id']
         availability  = get_user_presence(user_id)['raw']['availability']
         
-        # Phone Pilot
-        status = phonepilote_response.json()['extension'][0]['status']
-        print("Status: ",status)
+        # Availability on Phone Pilot
+        users = phonepilote_response.json()['users']
+        user = [u for u in users if u["sipExtension"] == sipExtension]
+        status = user[0]['status']
+
+        logger.info(f"Status: {status}")
         
         if (availability != "Available") or (status != 1) :
+
             instructions = (
                 f"Dites Bonjour à {caller_name}, puis présentez-vous"
                 f"Informez l'appelant que {called_name} est actuellement indisponible. "
-                f"Demandez-lui ensuite la raison de son appel afin de pouvoir le diriger vers "
-                f"le groupe le plus adapté à son besoin. "
-)
+                f"Demandez-lui ensuite la raison de son appel soit: "
+                f"- Afin de pouvoir le diriger vers le groupe le plus adapté à son besoin. "
+                f"Ou,"
+                f"- D'envoyer un message au correspondant "
+            )
+
+
             await self.session.generate_reply(
                     instructions = instructions,
                     allow_interruptions=False
 
                 )
+       
         else: # Disponible
             instructions = (
-                f"Dites Bonjour à {caller_name}, puis présentez-vous en donnant votre prénom : "
-                f"Informez l'appelant que {called_name} est disponible, mais qu'il est important de préciser la raison de son appel "
-                f"afin de pouvoir diriger l'appel vers le service le plus adapté. "
-
-                f"Si l'appelant souhaite parler directement à {called_name}, proposez de transférer l'appel immédiatement. "
-                f"Sinon, selon la raison donnée (par exemple un besoin RH ou support), transférez l'appel au service correspondant "
-                f"en tenant compte de leur disponibilité. "
-                f"Si aucun service spécialisé n'est requis ou disponible, assurez-vous que l'appel soit traité de la meilleure manière possible."
+                f"Bonjour {caller_name}, je me présente, je suis {self.agent_name} l'assistante de {called_name}. "
+                f"{called_name} est actuellement disponible."
+                f"Si vous souhaitez tout de même parler directement à {called_name}, je peux lui transférer votre appel immédiatement."
             )
 
 
-            await self.session.generate_reply(
-                    instructions =instructions,
+            await self.session.say(
+                    text = instructions,
                     allow_interruptions=False
                 )
 
@@ -192,20 +201,20 @@ class Diamanda(Agent):
           return {"success": "Ok"}
 
     @function_tool()
-    async def has_appointment(
+    async def call_transfert(
         self,
         context: RunContext,
-        name:str
+        distination:str
     )-> dict:
-      """Check if an appointment exists.
+      """Use this Tool to Transfert the call to its distination.
 
       Args:
-          name: The id of the appointment to check.
+          distination: the phone number to the destination
 
       Returns:
           A confirmation message.
       """
-      return {'has_appointment':True,"appointment_id":"10010202"}
+      return {'sucess':'ok'}
 
 
     @function_tool()
